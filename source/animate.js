@@ -7,23 +7,24 @@
         if (typeof jQuery !== 'function') {
             throw 'jQuery is required for using transit.js';
         }
+        
+        if (typeof define === 'function' && define.amd) {
+            // AMD. Register as an anonymous module.
+            define(['jQuery'], function () {
+                return (root.returnExportsGlobal = factory());
+            });
+        } else if (typeof exports === 'object') {
+            // Node. Does not work with strict CommonJS, but
+            // only CommonJS-like environments that support module.exports,
+            // like Node.
+            module.exports = factory(jQuery);
+        } else {
+            // Browser globals
+            root.transit = factory(jQuery);
+        }
+        
     } catch (e) {
         console.error(e);
-    }
-
-    if (typeof define === 'function' && define.amd) {
-        // AMD. Register as an anonymous module.
-        define(['jQuery'], function () {
-            return (root.returnExportsGlobal = factory());
-        });
-    } else if (typeof exports === 'object') {
-        // Node. Does not work with strict CommonJS, but
-        // only CommonJS-like environments that support module.exports,
-        // like Node.
-        module.exports = factory(jQuery);
-    } else {
-        // Browser globals
-        root.transit = factory(jQuery);
     }
 
 }(this, function ($) {
