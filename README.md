@@ -1,13 +1,29 @@
-Transit.js
-==========
+cssTransition
+===================
 
-Control CSS Transition via transit.js
 
-example:
+**Caution**
+Currently the project is unstable!
 
-``var trans = transit('div', {transform: ['translatey(10px)', '1s'], left: ['30px']}).createFrame({
-    transform: ['translatey(200px)', '1s'], left: '40px 1s'
+
+> **Example:  #1**
+
+```
+transit('div').createFrame({translatex: '20px'}, {duration: 0.5).play(function(){
+	// callback
+	alert('callback');
 });
-trans.loop().setSpeed(4);``
+```
 
+> **Example:  #2**
 
+```
+transit('div')
+.createFrame({translatex: '20px'}, {duration: 0.5)
+.createFrame({rotatey: '60deg'}, '1s 100ms easeInCric')
+.play(function(){
+	this.loop(5, function(){
+		this.rewind();
+	});
+});
+```
