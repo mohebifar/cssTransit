@@ -1,146 +1,401 @@
 (function (root, factory) {
-
     'use strict';
 
-    // check for jquery
-    try {
-        if (typeof jQuery !== 'function') {
-            throw 'jQuery is required for using transit.js';
-        }
-        
-        if (typeof define === 'function' && define.amd) {
-            // AMD. Register as an anonymous module.
-            define(['jQuery'], function () {
-                return (root.returnExportsGlobal = factory());
-            });
-        } else if (typeof exports === 'object') {
-            // Node. Does not work with strict CommonJS, but
-            // only CommonJS-like environments that support module.exports,
-            // like Node.
-            module.exports = factory(jQuery);
-        } else {
-            // Browser globals
-            root.transit = factory(jQuery);
-        }
-        
-    } catch (e) {
-        console.error(e);
+    if (typeof define === 'function' && define.amd) {
+        // AMD. Register as an anonymous module.
+        define([], function () {
+            return (root.returnExportsGlobal = factory());
+        });
+    } else if (typeof exports === 'object') {
+        // Node. Does not work with strict CommonJS, but
+        // only CommonJS-like environments that support module.exports,
+        // like Node.
+        module.exports = factory(jQuery);
+    } else {
+        // Browser globals
+        root.transit = factory(jQuery);
     }
 
 }(this, function ($) {
     'use strict';
 
-    // transit scope data container
+    // global options and data container
     var TRANSIT = {
         counter: 0,
-        singleton: {}
+        supportedTransforms: /^((translate|rotate|scale)(X|Y|Z|3d)?|matrix(3d)?|perspective|skew(X|Y)?)$/i
     };
 
 
-    var vendorPrefix, transit, transitionStyle;
-
+    var transit, easing, keyFrame, helpers;
 
     // -----------------------------------------
-    // VENDOR PREFIX ---------------------------
+    // Helper methods --------------------------
+
+    helpers = (function () {
+
+
+        var cssPrefixInstance, cssPrefix = function () {
+
+            // common vendors prefix
+            this.browserPrefix = [ 'Moz', 'Webkit', 'O', 'ms' ];
+
+            // cache properties to improve performance
+            this.cache = [];
+
+            // testing element
+            this.element = $('<div>')[0];
+
+        };
+
+        /**
+         * check property is supported and if not supported via standard property
+         * try to find prefixed property instead
+         * @param property
+         * @returns {string|null}
+         */
+        cssPrefix.prototype.get = function (property) {
+
+            var supported, prefixed, capitalize, camelCase, i;
+
+            // looking for it in cache
+            if (this.cache[property]) {
+                return this.cache[property];
+            }
+
+            capitalize = property.charAt(0).toUpperCase() + property.slice(1);
+
+            // check for standard property
+            if (property in this.element.style) {
+                supported = property;
+            } else {
+
+                // camelCased property is for solve issues with firefox browser
+                // ex. convert background-color to backgroundColor
+                if (property.indexOf('-') !== -1) {
+                    camelCase = this._toCamelCase(property);
+                }
+
+
+                if (camelCase in this.element.style) {
+                    supported = property;
+                } else {
+
+                    for (i = 0; i < this.browserPrefix.length; i++) {
+                        prefixed = this.browserPrefix[i] + capitalize;
+
+                        if (prefixed in this.element.style) {
+                            supported = prefixed;
+                            // in this case we knows scripts executed on witch browser
+                            // so we cache current prefix to improve performance
+                            if (this.browserPrefix.length > 1) {
+                                this.browserPrefix = this.browserPrefix.splice(i, 1);
+                            }
+                            break;
+                        }
+                    }
+                }
+            }
+
+            // also property key cache has a big affect on library performance
+            this.cache[ property ] = supported;
+
+            return supported;
+        };
+
+        /**
+         * capitalize property for example convert background-color to backgroundColor
+         * @param property
+         * @returns {string}
+         * @private
+         */
+        cssPrefix.prototype._toCamelCase = function (property) {
+
+            var camelCase, i;
+
+            camelCase = property.split('-');
+            for (i in camelCase) {
+
+                // keep first word unCapitalized
+                if (i == 0) continue;
+                if (camelCase.hasOwnProperty(i)) {
+                    camelCase[i] = camelCase[i].charAt(0).toUpperCase() + camelCase[i].slice(1);
+                }
+            }
+            return camelCase.join('');
+        };
+
+        // css prefix
+        cssPrefixInstance = new cssPrefix();
+
+        return {
+            /**
+             * compute duration property
+             * @param duration
+             * @returns string
+             */
+            computeDuration: function (duration) {
+                var computedDuration;
+
+                // convert duration param to string
+                duration += '';
+
+                if (duration.indexOf('ms') == -1) {
+                    // if duration unit is seconds
+                    computedDuration = parseFloat(duration) * 1000;
+                } else {
+                    computedDuration = parseFloat(duration);
+                }
+
+                // apply speed option
+                if (this.FLAGS.speed < 0) {
+                    computedDuration = (computedDuration * this.FLAGS.speed * -1) + 'ms';
+                } else {
+                    computedDuration = (computedDuration / this.FLAGS.speed) + 'ms';
+                }
+
+                return computedDuration;
+            },
+
+            cssPrefix: function (key) {
+                return cssPrefixInstance.get(key);
+            }
+        };
+    }());
+
     // -----------------------------------------
+    // Easing Definition -----------------------
 
-    vendorPrefix = function () {
+    easing = {
 
-        // common vendors prefix
-        this.browserPrefix = [ 'Moz', 'Webkit', 'O', 'ms' ];
+        // Basic easing
+        linear: '0.250, 0.250, 0.750, 0.750',
+        ease: '0.250, 0.100, 0.250, 1.000',
+        easeIn: '0.420, 0.000, 1.000, 1.000',
+        easeOut: '0.250, 0.250, 0.750, 0.750',
+        easeInOut: '0.420, 0.000, 0.580, 1.000',
 
-        // cache properties to improve performance
-        this.cache = [];
+        // Sine
+        easeInSine: '0.47, 0, 0.745, 0.715',
+        easeOutSine: '0.39, 0.575, 0.565, 1',
+        easeInOutSine: '0.39, 0.575, 0.565, 1',
 
-        // testing element
-        this.element = $('<div>')[0];
+        // Quad
+        easeInQuad: '0.55, 0.085, 0.68, 0.53',
+        easeOutQuad: '0.25, 0.46, 0.45, 0.94',
+        easeInOutQuad: '0.455, 0.03, 0.515, 0.955',
+
+        // Cubic
+        easeInCubic: '0.55, 0.055, 0.675, 0.19',
+        easeOutCubic: '0.215, 0.61, 0.355, 1',
+        easeInOutCubic: '0.645, 0.045, 0.355, 1',
+
+        // Quart
+        easeInQuart: '0.895, 0.03, 0.685, 0.22',
+        easeOutQuart: '0.165, 0.84, 0.44, 1',
+        easeInOutQuart: '0.77, 0, 0.175, 1',
+
+        // Quint
+        easeInQuint: '0.755, 0.05, 0.855, 0.06',
+        easeOutQuint: '0.23, 1, 0.32, 1',
+        easeInOutQuint: '0.86, 0, 0.07, 1',
+
+        // Expo
+        easeInExpo: '0.95, 0.05, 0.795, 0.035',
+        easeOutExpo: '0.19, 1, 0.22, 1',
+        easeInOutExpo: '1, 0, 0, 1',
+
+        // Circ
+        easeInCirc: '0.6, 0.04, 0.98, 0.335',
+        easeOutCirc: '0.075, 0.82, 0.165, 1',
+        easeInOutCirc: '0.785, 0.135, 0.15, 0.86',
+
+        // Back
+        easeInBack: '0.6, -0.28, 0.735, 0.045',
+        easeOutBack: '0.175, 0.885, 0.32, 1.275',
+        easeInOutBack: '0.68, -0.55, 0.265, 1.55'
+    };
+
+    // -----------------------------------------
+    // KEYFRAME Object -------------------------
+
+    /**
+     * {rotateY: '30deg', translatez: '50px 1s easeInCric 2s', opacity: '1 * * 1s'}
+     * {color: ["light blue", 1,,1], backgroundColor: ['orange',,,2]}
+     * {color: {value: 2, duration: 1, delay: 2, easing: 'easeInCric'}}
+     *
+     * @param properties
+     * @param options
+     * @param callback
+     * @constructor
+     */
+    keyFrame = function (properties, options, transit) {
+
+        this.transit = transit;
+        this.rawParams = [properties, options];
+        this.properties = false;
+        this.options = {};
+
+        // parse raw data
+        this.parse(properties, options);
+
+        /***
+         if (typeof callback == 'function') {
+            this.setOption('callback', callback);
+        }
+         ***/
 
     };
 
     /**
-     * check property is supported and if not supported via standard property
-     * try to find prefixed property instead
-     * @param property
-     * @returns {string|null}
+     *
+     * @param properties
+     * @param options
      */
-    vendorPrefix.prototype.get = function (property) {
+    keyFrame.prototype.parse = function (properties, options) {
 
-        var supported, prefixed, capitalize, camelCase, i;
+        var transform = {},
+            returnProperties = {};
 
-        // looking for it in cache
-        if (this.cache[property]) {
-            return this.cache[property];
-        }
-
-        capitalize = property.charAt(0).toUpperCase() + property.slice(1);
-
-        // check for standard property
-        if (property in this.element.style) {
-            supported = property;
-        } else {
-
-            // camelCased property is for solve issues with firefox browser
-            // ex. convert background-color to backgroundColor
-            if (property.indexOf('-') !== -1) {
-                camelCase = this._toCamelCase(property);
-            }
-
-
-            if (camelCase in this.element.style) {
-                supported = property;
-            } else {
-
-                for (i = 0; i < this.browserPrefix.length; i++) {
-                    prefixed = this.browserPrefix[i] + capitalize;
-
-                    if (prefixed in this.element.style) {
-                        supported = prefixed;
-                        // in this case we knows scripts executed on witch browser
-                        // so we cache current prefix to improve performance
-                        if (this.browserPrefix.length > 1) {
-                            this.browserPrefix = this.browserPrefix.splice(i, 1);
-                        }
-                        break;
-                    }
+        for (var k in properties) {
+            if (properties.hasOwnProperty(k)) {
+                if (TRANSIT.supportedTransforms.test(k)) {
+                    transform[k] = properties[k];
+                } else {
+                    returnProperties[k] = this.getPropertiesObject(k, properties[k]);
                 }
             }
         }
 
-        // also property key cache has a big affect on library performance
-        this.cache[ property ] = supported;
+        // {transform: '20deg', opacity: 1}, {duration: 1, delay: 1, easing: ''}
+        // {translateZ: '10px'}, '1 * easeInCric'
+        if (Object.keys(transform).length > 0) {
+            returnProperties['transform'] = this.getTransform(transform);
+        }
 
-        return supported;
+        // set properties
+        this.properties = returnProperties;
+
+        // parse options
+        this.setOptions(options);
+
     };
 
     /**
-     * capitalize property for example convert background-color to backgroundColor
-     * @param property
-     * @returns {string}
+     *
+     * @param transforms
+     * @returns {{property: *, value: (string|*)}}
      * @private
      */
-    vendorPrefix.prototype._toCamelCase = function (property) {
+    keyFrame.prototype.getTransform = function (transforms) {
 
-        var camelCase, i;
-
-        camelCase = property.split('-');
-        for (i in camelCase) {
-
-            // keep first word unCapitalized
-            if (i == 0) continue;
-            camelCase[i] = camelCase[i].charAt(0).toUpperCase() + camelCase[i].slice(1);
+        var value = '';
+        for (var k in transforms) {
+            if (transforms.hasOwnProperty(k)) {
+                value += k + '(' + transforms[k] + ') ';
+            }
         }
-        return camelCase.join('');
+        return this.getPropertiesObject('transform', value);
+
     };
 
-  //  vendorPrefix.prototype.constructor = vendorPrefix;
+    /**
+     *
+     * @param key
+     * @param value
+     * @private
+     * @returns {{property: *, value: (string|*)}}
+     */
+    keyFrame.prototype.getPropertiesObject = function (key, value) {
+        console.log(value);
+        return {
+            property: helpers.cssPrefix(key),
+            value: value
+        };
 
-    // create an instance of vendor prefix
-    TRANSIT.singleton.vendorPrefix = new vendorPrefix;
+    };
 
+    /**
+     *
+     * @param k
+     * @returns {*}
+     */
+    keyFrame.prototype.getProperty = function (k) {
+        if (this.properties.hasOwnProperty(k)) {
+            return this.properties[k];
+        }
+        return null;
+    };
+
+    keyFrame.prototype.getOption = function (k) {
+        if (this.options.hasOwnProperty(k)) {
+            return this.options[k];
+        }
+        return null;
+    };
+
+    keyFrame.prototype.setOptions = function (options, value) {
+
+        if (value && typeof options == 'string') {
+            // options is key param like callback
+            this.setOption(options, value);
+            return;
+        }
+
+        if (typeof options === 'string') {
+            this.setOptions(options.split(' '));
+            return;
+        }
+
+        if ($.isArray(options)) {
+
+            var keysMap = ['duration', 'delay', 'easing'];
+            for (var i = 0; options.length > i; i++) {
+
+                // skip * that used as default value
+                if (options[i] == '*') continue;
+
+                if (keysMap[i]) {
+                    this.setOption(keysMap[i], options[i]);
+                }
+            }
+        } else if ($.isPlainObject(options)) {
+            for (var k in options) {
+                if (options.hasOwnProperty(k)) {
+                    this.setOption(k, options[k]);
+                }
+            }
+        }
+
+    };
+
+    /**
+     *
+     * @param key
+     * @param value
+     * @private
+     */
+    keyFrame.prototype.setOption = function (key, value) {
+        if (this.options.hasOwnProperty(key)) {
+            this.options[key] = value;
+        }
+    };
+
+    keyFrame.prototype.getOptions = function () {
+        var options = {};
+        for (var k in this.transit.config) {
+            if (this.options.hasOwnProperty(k)) {
+                options[k] = this.options[k];
+            } else {
+                options[k] = this.transit.config[k];
+            }
+        }
+        return options;
+    }
+
+    window.keyFrame = keyFrame;
 
     // -----------------------------------------
     // TRANSIT ---------------------------------
-    // -----------------------------------------
 
 
     /**
@@ -155,14 +410,16 @@
         this.selector = selector;
 
         // Check elements to be an instance of jQuery
-        if (!(selector instanceof $)) {
-            this.elements = $(selector);
+        if (typeof selector == 'string') {
+            this.elements = document.querySelectorAll(selector);
+        } else {
+            this.elements = selector;
         }
 
         try {
 
             if (this.elements.length < 1) {
-                throw 'there is not elements for ' + this.elements.selector;
+                console.error('there is not elements for ' + this.selector);
             }
 
             // set default transit flags
@@ -176,11 +433,13 @@
                 force: false
             };
 
-            // set default transition options
-            this.defaultOptions = {
+
+            // transit configuration
+            this.config = {
                 duration: '1s',
                 delay: 0,
-                easing: 'ease-out'
+                easing: 'ease',
+                callback: null
             };
 
             // private transit properties
@@ -201,8 +460,7 @@
             this._lastIndex = null;
 
             if (options) {
-                // this.createFrame();
-                this.setOptions(options);
+                this.createFrame(options);
             }
 
             // use current counter as id
@@ -213,56 +471,55 @@
             this._loopLimitCounter = 0;
 
         } catch (e) {
-            console.log('Transit error: ' + e);
+            console.log('transit error! ' + e);
         }
     };
+
+    transit.prototype._getEasing = function (ease) {
+        if (!easing[ease]) {
+            return ease
+        }
+
+        return 'cubic-bezier(' + easing[ease] + ')';
+    }
 
     /**
      * set elements transition style
      * @param data
      * @private
      */
-    transit.prototype._setTransitionStyle = function (data) {
+    transit.prototype.applyTransitions = function (frame) {
+
+        var options,
+            _this = this;
+
+        options = frame.getOptions();
 
         var properties = [
             [],
             [],
             [],
             []
-        ], _this = this, styleProperties;
+        ], styleProperties;
 
-        for (var k in data) {
+        for (var k in frame.properties) {
 
             // skip _options key
-            if (k == '_options') continue;
+            // if (k == '_options') continue;
 
-            properties[0].push(k);
-            properties[1].push(this._computeDuration(data[k].duration));
-            properties[2].push(data[k].timing);
-            properties[3].push(this._computeDuration(data[k].delay));
+            properties[0].push(k.trim());
+            properties[1].push(options.duration);
+            properties[2].push(this._getEasing(options.timing));
+            properties[3].push(options.delay);
         }
 
 
         styleProperties = $.map(['transition-property', 'transition-duration', 'transition-timing-function', 'transition-delay'], function (k) {
-            return TRANSIT.singleton.vendorPrefix.get(k);
-        });
-        // Get previous styles
-        $.each(properties, function (i, data) {
-
-            var oldStyle = _this.elements.filter(':first').css(styleProperties[i]);
-
-            if (oldStyle) {
-                oldStyle = oldStyle.split(',');
-                for (var k in oldStyle) {
-                    // fix issue with IE11
-                    if (oldStyle[k] == 'all') return false;
-                    properties[i].unshift(oldStyle[k]);
-                }
-            }
+            return helpers.cssPrefix(k);
         });
 
         $.each(properties, function (i, data) {
-            _this.elements.css(styleProperties[i], data.join(', '));
+            _this.elements.style[styleProperties[i]] =  data.join(', ');
         });
     };
 
@@ -270,6 +527,7 @@
      * normalize transition options object
      * @param property
      * @param data
+     * @deprecated
      * @returns {{}}
      */
     transit.prototype._getTransitionObject = function (property, data) {
@@ -300,39 +558,62 @@
 
     transit.prototype._checkDefaultValues = function (property, value) {
         this.elements.each(function (i, o) {
+
+            if (o.style[property] !== '') return;
             switch (property) {
                 case 'width':
-                    if (!o.style[property]) {
-                        o.style[property] = o.offsetWidth + 'px';
-                    }
+                    o.style[property] = o.offsetWidth + 'px';
+                    break;
+                case 'top':
+                case 'left':
+                case 'right':
+                case 'bottom':
+                    o.style[property] = 0 + 'px';
                     break;
             }
         });
     };
 
+    transit.prototype.on = function (e, selector) {
+        var target = null, that = this;
+
+        if (selector) target = $(selector);
+        else target = this.elements;
+
+        if (e == 'hover') {
+            target.hover(function () {
+                that.play();
+            }, function () {
+                that.backward();
+            });
+        } else {
+            target[e](function () {
+                that.play();
+            });
+        }
+    }
+
     transit.prototype._performTransition = function () {
 
 
-        var transitions = {}, properties, _this = this, defaultOptions;
+        var transitions = {}, frame, _this = this, defaultOptions;
 
-        properties = this._getFrame(-1);
+        frame = this._getFrame(-1);
+
 
         try {
-            if (this.elements.length == 0) {
-                throw 'NO ELEMENTS';
-            }
 
-            if (!properties) {
-                throw 'Current keyframe not exists' + this._currentIndex;
+            if (this.elements.length == 0 || !frame) {
+                console.error(this.elements.length == 0 ? 'No elements!' : 'undefined keyframe! ' + this._currentIndex);
+                return this;
             }
 
             // set last executed frame index
             this._lastIndex = this._currentIndex;
-
-            defaultOptions = this._getDefaultOptions(properties);
-
-            for (var k in properties) {
+            /**
+            for (var k in frame.proprties) {
                 transitions[k] = this._getTransitionObject(properties[k], defaultOptions);
+
 
                 if (/^[0-9.]+$/.test(transitions[k].value)) {
                     transitions[k].value = parseFloat(transitions[k].value);
@@ -346,38 +627,28 @@
                     delete transitions[k];
                 }
 
-            }
 
-            // if there is no new value
-            if (!Object.keys(transitions).length) {
+            }**/
+
+            // if there is no properties to apply
+            if (!Object.keys(frame.properties).length) {
 
                 this._onTransitionEnd();
-                properties.callback && !this.FLAGS.disableCallback && properties.callback();
+                frame.options.callback && !this.FLAGS.disableCallback && frame.options.callback();
                 return false;
             }
 
             // Set transition style
-            this._setTransitionStyle(transitions);
+            this.applyTransitions(frame);
 
             // Clear current transition properties stack
             this._framesProperties[this._currentIndex] = [];
 
+            console.log(frame.properties);
+
             // Apply new values
-            for (var k in transitions) {
-
-                // skip _options key
-                if (k == '_options') continue;
-
-                k = TRANSIT.singleton.vendorPrefix.get(k);
-
-                this._framesProperties[this._currentIndex].push(k);
-
-                this._checkDefaultValues(k, transitions[k].value)
-                setTimeout((function (k, transitions) {
-                    return function () {
-                        _this.elements.css(k, transitions[k].value ? transitions[k].value : '');
-                    }
-                }(k, transitions)), 2);
+            for (var k in frame.properties) {
+                _this.elements.style[frame.properties[k].property] = frame.properties[k].value;
 
             }
 
@@ -389,7 +660,7 @@
                 _this._transitPrivateCallback(e, properties._options.callback);
             };
 
-            this.elements.on('transitionend', {start: new Date().getTime(), keyframe: this._currentIndex}, this._framesFunction[this._currentIndex]);
+            this.elements.addEventListener('transitionend', {start: new Date().getTime(), keyframe: this._currentIndex}, this._framesFunction[this._currentIndex]);
 
         } catch (e) {
             console.error('Transit _performTransition: ' + e, e.stack);
@@ -437,85 +708,6 @@
         }
     };
 
-
-    transit.prototype._getDefaultOptions = function (properties) {
-
-        var callback, duration, iterate, delay, timing, _this = this, options = {};
-
-        if (typeof properties._options == 'undefined') {
-            properties._options = {};
-        }
-
-        // callback
-        if (properties.callback && typeof properties.callback === 'function') {
-            properties._options.callback = properties.callback;
-
-            delete properties.callback;
-        }
-
-        // duration
-        if (properties.duration) {
-            properties._options.duration = properties.duration;
-            delete properties.duration;
-        } else if (!properties._options.duration) {
-            properties._options.duration = this.defaultOptions.duration;
-        }
-
-        // delay
-        if (properties.delay) {
-            properties._options.delay = properties.delay;
-            delete properties.delay;
-        } else if (!properties._options.delay) {
-            properties._options.delay = this.defaultOptions.delay;
-        }
-
-        // timing
-        if (properties.timing) {
-            properties._options.timing = properties.timing;
-            delete properties.timing;
-        } else if (!properties._options.timing) {
-            properties._options.timing = this.defaultOptions.easing;
-        }
-
-        // iterate
-        if (['once', 'always'].indexOf(properties.iterate) == -1) {
-            properties._options.iterate = 'once';
-        } else {
-            properties._options.iterate = properties.iterate;
-        }
-
-        delete properties.iterate;
-        return properties._options;
-    };
-
-    /**
-     * compute duration property
-     * @param duration
-     * @returns string
-     * @private
-     */
-    transit.prototype._computeDuration = function (duration) {
-        var computedDuration;
-
-        // convert duration param to string
-        duration += '';
-
-        if (duration.indexOf('ms') == -1) {
-            // if duration unit is seconds
-            computedDuration = parseFloat(duration) * 1000;
-        } else {
-            computedDuration = parseFloat(duration);
-        }
-
-        // apply speed option
-        if (this.FLAGS.speed < 0) {
-            computedDuration = (computedDuration * this.FLAGS.speed * -1) + 'ms';
-        } else {
-            computedDuration = (computedDuration / this.FLAGS.speed) + 'ms';
-        }
-
-        return computedDuration;
-    };
 
     /**
      * if index presented, return indexed options
@@ -658,14 +850,11 @@
      * @param options
      * @returns {transit}
      */
-    transit.prototype.createFrame = function (options) {
+    transit.prototype.createFrame = function (properties, options) {
 
         var index = this._frames.length;
-        this._frames[index] = {};
+        this._frames[index] = new keyFrame(properties, options, this);
 
-        if (options) {
-            this.setOptions(options, index);
-        }
         return this;
     };
 
@@ -854,6 +1043,7 @@
      * @param value
      * @param frame
      * @returns {transit}
+     * @deprecated
      */
     transit.prototype.setOptions = function (key, value, frame) {
 
@@ -885,7 +1075,7 @@
             value = result;
         }
 
-        this._frames[frame][key] = value;
+        // this._frames[frame][key] = value;
 
         return this;
     };
@@ -895,6 +1085,7 @@
      * remove an option from current frame options
      * @param key
      * @param index
+     * @deprecated
      */
     transit.prototype.removeOption = function (key, index) {
 
@@ -906,11 +1097,65 @@
             delete this._frames[index][key];
         }
 
+        return this;
+    };
+
+    /**
+     * set delay
+     * @param key
+     * @param index
+     */
+    transit.prototype.setDelay = function (duration) {
+        this.defaultOptions.delay = duration;
+        return this;
+    };
+
+    /**
+     * set perspective
+     * @param key
+     * @param index
+     */
+    transit.prototype.perspective = function (value, originX, originY) {
+        // set perspective
+        this.elements.parent().css(helpers.cssPrefix('perspective'), value);
+        if (originX || originY) {
+            this.perspectiveOrigin(originX, originY);
+        }
+        return this;
+    };
+
+    /**
+     * set perspective origin
+     * @param originX
+     * @param originY
+     * @returns {transit}
+     */
+    transit.prototype.perspectiveOrigin = function (originX, originY) {
+
+        // if origin be a false value
+        if (typeof originX == 'undefined' || originX == null) {
+            originX = '50%';
+        }
+        if (typeof originY == 'undefined' || originY == null) {
+            originY = '50%';
+        }
+
+        // if origin value is numeric
+        if (/^\d+$/.test(originX)) {
+            originX += 'px';
+        }
+        if (/^\d+$/.test(originY)) {
+            originY += 'px';
+        }
+
+        // set perspective origin style style
+        this.elements.parent().css(helpers.cssPrefix('perspective-origin'), originX + ' ' + originY);
+
+        return this;
     };
 
 
-
-    return function(selector, options){
+    return function (selector, options) {
         return new transit(selector, options);
     };
 }));
